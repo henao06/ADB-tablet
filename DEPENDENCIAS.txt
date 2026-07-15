@@ -1,0 +1,98 @@
+============================================================================
+ DEPENDENCIAS — Proxy de responsividad + acceso desde tablets (Android)
+============================================================================
+ Sistema: Ubuntu / Debian (gestor de paquetes apt).
+ En otra distro, cambia "sudo apt install" por tu gestor (dnf, pacman, etc.).
+----------------------------------------------------------------------------
+
+ INSTALAR TODO DE UNA (lo mas facil):
+
+     sudo apt update && sudo apt install -y nodejs android-tools-adb nmap curl
+
+ VERIFICAR QUE ESTE TODO:
+
+     for c in node adb nmap curl; do command -v $c >/dev/null \
+       && echo "[OK] $c" || echo "[FALTA] $c"; done
+
+----------------------------------------------------------------------------
+ DETALLE DE CADA UNA
+----------------------------------------------------------------------------
+
+ 1) Node.js
+    Para que sirve : corre el proxy (proxy.js) en el puerto 8090.
+    Instalar       : sudo apt install -y nodejs
+    Verificar      : node --version
+
+ 2) adb  (paquete: android-tools-adb)
+    Para que sirve : vincular y conectar la tablet por WiFi, y armar el
+                     'reverse' que hace que la tablet vea localhost:8090.
+    Instalar       : sudo apt install -y android-tools-adb
+    Verificar      : adb version
+
+ 3) nmap
+    Para que sirve : reconexion automatica. Escanea la IP de la tablet para
+                     encontrar el puerto nuevo de adb cuando rota (reinicio).
+    Instalar       : sudo apt install -y nmap
+    Verificar      : nmap --version
+
+ 4) curl
+    Para que sirve : el script chequea que el proxy y los backends respondan.
+    Instalar       : sudo apt install -y curl
+    Verificar      : curl --version
+
+ (awk, sed, grep y bash ya vienen en cualquier Linux: NO hay que instalarlos.)
+
+----------------------------------------------------------------------------
+ PREREQUISITOS  (tienen que estar CORRIENDO en tu PC; NO se instalan aca)
+----------------------------------------------------------------------------
+
+   - Apache con la App + Moodle  -> puerto 80
+   - chatkit (backend)           -> puerto 8000
+   - Server.JS (solo si usas Jira) -> puerto 8080
+
+----------------------------------------------------------------------------
+ NOTA
+----------------------------------------------------------------------------
+
+   - avahi-utils lo instalamos SOLO para diagnosticar el mDNS. La solucion
+     final NO lo usa (la red "LPV Dev" bloquea multicast). NO es necesario.
+
+   - Opcional pero recomendado: poner una RESERVA DHCP a la tablet en el
+     router, para que su IP no cambie nunca. Asi la reconexion queda perfecta.
+============================================================================
+
+
+
+
+
+
+                           |                                          CONCEPTOS 
+
+
+  - IP = la dirección de una casa en el barrio. 192.168.3.155 = tu PC, 192.168.3.26 = la tablet.
+  - Puerto = la PUERTA específica de esa casa. Una casa (IP) tiene muchas puertas: la 80 (la app), la 8000 (chatkit), la 8090 (el proxy).
+  - localhost = "MI propia casa". Cuando cualquier dispositivo dice "localhost", se refiere a sí mismo. Es la palabra mágica que significa "acá adentro, yo".
+  - Serial = el número de cédula de la tablet (b830437). No cambia NUNCA → la reconocemos aunque cambie de IP o puerto.
+
+  La CONEXIÓN con la tablet
+
+  - adb = el control remoto de Android para devs. Te deja hablarle a la tablet desde la PC.
+  - adb reverse = un túnel: hace que la puerta localhost:8090 de la TABLET en realidad lleve a tu PC. Por eso la tablet "cree" que el proxy es suyo (y por eso ve
+  localhost → no redirige y el chat carga).
+  
+  El PROXY y sus 3 trucos
+
+  - Proxy = un recepcionista en el medio. La tablet le habla solo a él, y él reparte a Moodle, chatkit, etc.
+  - Host header (host spoof) = cuando golpeás una puerta decís "vengo a ver a tal". El proxy le miente a Moodle diciendo "soy localhost" → Moodle atiende contento (no
+  redirige).
+  - CORS = el guardia de seguridad del navegador. Solo deja pedir datos a orígenes permitidos. El proxy le pone el sello "permitido" para que el chatkit no bloquee.
+  - window.location.hostname = lo que el navegador LEE de la barra de direcciones. La app mira esto para elegir backend → por eso redirige si no es localhost.
+
+  El DESCUBRIMIENTO (reconexión)
+
+  - mDNS = el "¿quién anda por acá?" gritado a toda la red. Un dispositivo grita "soy la tablet, estoy en tal IP:puerto" y los demás lo escuchan, sin servidor central.
+  Sirve para auto-encontrar dispositivos. Tu red lo BLOQUEA (no deja gritar) → por eso no lo pudimos usar.
+  - nmap = el que toca todas las puertas de una casa para ver cuáles están abiertas. Lo usamos para encontrar el puerto nuevo de adb cuando rota (el reemplazo del mDNS).
+  - DHCP = el que reparte las direcciones (IPs) en el barrio. La "reserva DHCP" = pedirle que SIEMPRE le dé la misma dirección a la tablet.
+
+ 
