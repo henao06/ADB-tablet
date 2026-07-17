@@ -7,11 +7,13 @@
 
  INSTALAR TODO DE UNA (lo mas facil):
 
-     sudo apt update && sudo apt install -y nodejs android-tools-adb nmap curl
+     sudo apt update && sudo apt install -y nodejs android-tools-adb nmap curl qrencode
+     npm i -g pm2 sudo apt install -y qrencode
+    
 
  VERIFICAR QUE ESTE TODO:
 
-     for c in node adb nmap curl; do command -v $c >/dev/null \
+     for c in node adb nmap curl qrencode pm2; do command -v $c >/dev/null \
        && echo "[OK] $c" || echo "[FALTA] $c"; done
 
 ----------------------------------------------------------------------------
@@ -40,15 +42,32 @@
     Instalar       : sudo apt install -y curl
     Verificar      : curl --version
 
+ 5) qrencode
+    Para que sirve : genera el QR (./tablet.sh y ./start.sh) para abrir la app
+                     escaneando con la camara de la tablet.
+    Instalar       : sudo apt install -y qrencode
+    Verificar      : qrencode --version
+
+ 6) pm2  (paquete npm global, NO apt)
+    Para que sirve : arranca y mantiene vivos los servicios Node (agente:3000,
+                     frontend:5173, proxy:8090) desde ecosystem.config.js.
+                     Los reinicia si se caen. ./tablet.sh los reinicia con esto.
+    Instalar       : npm i -g pm2
+    Verificar      : pm2 --version
+    Uso            : pm2 start ecosystem.config.js | pm2 status | pm2 logs
+
  (awk, sed, grep y bash ya vienen en cualquier Linux: NO hay que instalarlos.)
 
 ----------------------------------------------------------------------------
  PREREQUISITOS  (tienen que estar CORRIENDO en tu PC; NO se instalan aca)
 ----------------------------------------------------------------------------
 
-   - Apache con la App + Moodle  -> puerto 80
-   - chatkit (backend)           -> puerto 8000
+   - Apache con la App + Moodle  -> puerto 80   (systemd, NO en PM2)
+   - agente de IA (ai_agent)     -> puerto 3000 (PM2; reemplazo del viejo chatkit:8000)
+   - frontend (MCV_AD, vite)     -> puerto 5173 (PM2)
    - Server.JS (solo si usas Jira) -> puerto 8080
+
+   Los 3 servicios Node los levanta PM2 de una:  pm2 start ecosystem.config.js
 
 ----------------------------------------------------------------------------
  NOTA
