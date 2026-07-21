@@ -1,99 +1,172 @@
+# ADB Tablet Proxy
 
-## ADB Tablet Proxy
-A zero-dependency HTTP proxy and Android device bridge that exposes local development servers to tablets on the same LAN. It solves three problems simultaneously: host-based redirects, CORS restrictions, and browser security policies that prevent testing on real devices.
-## Problem
-Modern web applications often decide which backend to call based on window.location.hostname. When accessed from a non-localhost origin (e.g., a tablet on the LAN), apps either redirect to a production environment or fail due to CORS policies. Certain services and libraries reject requests that do not explicitly come from localhost or restrict CORS permissions solely to this origin.
-This tool eliminates all three obstacles without modifying application code:
+A zero-dependency HTTP proxy and Android device bridge that exposes local development servers to tablets and phones on the same LAN. Test your work on real devices — with the exact same `localhost` URLs you use on your desktop.
 
-   1. Host spoofing -- rewrites the Host header to localhost before forwarding requests to backends, preventing unwanted redirects.
-   2. CORS injection -- injects permissive CORS headers into every response, satisfying browser security checks.
-   3. On-the-fly bundle rewriting -- rewrites JS bundles in transit so backend URLs reference the proxy origin instead of localhost. No files are modified on disk.
+It solves three problems at once, without touching your application code:
 
-## Architecture
-The project consists of two main components:
-## Proxy Server (proxy.js)
-A single Node.js HTTP server that listens on a configurable port (default 8090) and routes incoming requests to local backends based on URL prefix matching. Routes are defined declaratively in proxy.env -- the longest prefix wins. The proxy handles host spoofing, CORS injection, and bundle rewriting transparently.
-## ADB Bridge (tablet.sh)
-A shell script that manages Android Debug Bridge (ADB) connections to one or more tablets. It sets up adb reverse tunnels so that each tablet sees localhost services as if they were running locally. Only one transport (USB or WiFi) is used per device to avoid tunnel contention.
-## Prerequisites
-The following services must be running on your development machine:
+1. **Host-based redirects** — apps and backends that only accept requests from `localhost` get a spoofed `Host` header and respond normally.
+2. **CORS restrictions** — permissive CORS headers are injected into every response, so browsers stop blocking cross-origin calls.
+3. **Real-device access** — `adb reverse` tunnels make each Android device see your machine's services as its own `localhost`.
 
-* Main application backend on port 80
-* Secondary services or APIs on port 8000
+## How it works
 
-System dependencies:
+```
+Tablet browser  ──  http://localhost:<port>/...
+      │
+      │  adb reverse tunnel (USB or WiFi — never both)
+      ▼
+Development machine
+      │
+      ▼
+Proxy (proxy.js, default :8090)
+      ├──►  ROUTE /api  → 127.0.0.1:8000      Host header spoofed to "localhost"
+      └──►  ROUTE /     → 127.0.0.1:80        CORS headers injected
+```
 
-* Node.js -- runs the proxy server
-* ADB (android-tools-adb) -- Android device bridge
-* nmap -- automatic port scanning for WiFi reconnection
-* curl -- health checks
-* qrencode -- QR code generation for wireless pairing (optional)
+- **`tablet.sh`** manages device enrollment and connections over ADB, and registers the reverse tunnels for every port listed in `urls.env`.
+- **`proxy.js`** is a single-file Node.js HTTP proxy (no npm packages) that fans requests out to one or more local backends by URL prefix — longest prefix wins. It can also rewrite JS bundles in transit (opt-in, marker-based; a no-op for apps that don't contain the marker).
+- **One transport per device, by design.** An `adb reverse` tunnel binds to a single transport. If USB and WiFi are connected simultaneously, the tunnel sticks to USB and dies when the cable is unplugged. Every mode cleans up existing tunnels and re-registers them on exactly one transport, so that failure mode cannot happen.
+
+> **iOS note:** iPads/iPhones have no ADB. For those, run `./start.sh` and open the printed `http://<your-lan-ip>:8090/...` URL (or scan its QR code) in Safari — same proxy, no tunnel.
+
+## Quick start
+
+```bash
+git clone <repo-url> && cd ADB-tablet
+./tablet.sh setup            # installs every missing dependency (apt/dnf/pacman)
+./tablet.sh usb my-tablet    # enroll over USB cable, or:
+./tablet.sh qr my-tablet     # enroll wirelessly via QR pairing
+```
+
+Then open the same URL you use locally (e.g. `http://localhost:5173`) in the tablet's browser. Done.
+
+Day-to-day, a single command reconnects everything:
+
+```bash
+./tablet.sh                  # reconnects ALL enrolled devices per their saved type
+```
+
+## Requirements
+
+| Tool | Purpose | Required |
+|---|---|---|
+| `adb` | device pairing, connections, reverse tunnels | yes |
+| `node` | runs the proxy | yes |
+| `curl` | health checks | yes |
+| `nmap` | WiFi auto-reconnect when the ADB port rotates | recommended |
+| `qrencode` | renders the pairing/access QR codes in the terminal | recommended |
+| `avahi-utils` | mDNS discovery in QR mode | optional |
+
+`./tablet.sh setup` detects your package manager (`apt`, `dnf`, or `pacman`) and installs **only what is missing**. Every run of `tablet.sh` also verifies dependencies and prints exactly what is absent and how to install it.
+
+> **Warning:** keep a single `adb` installation. Two different versions (e.g. the distro package plus Google platform-tools) fight over the ADB server on port 5037 — each client kills the other's server, which surfaces as `protocol fault / connection reset` mid-pairing. The script detects this and warns at startup.
+
+## Commands
+
+### Connecting
+
+| Command | Description |
+|---|---|
+| `./tablet.sh setup` | Install every missing dependency |
+| `./tablet.sh qr [name]` | Enroll/connect via QR wireless pairing → WiFi |
+| `./tablet.sh usb [name]` | Enroll/connect via USB cable → USB |
+| `./tablet.sh wifi [name]` | Reconnect an enrolled device over WiFi |
+| `./tablet.sh use` | Interactive menu: pick a device and/or switch its transport |
+| `./tablet.sh` | Reconnect all enrolled devices per their saved type |
+| `./tablet.sh status` | Show every device and how it is connected |
+
+QR enrollment is fully automatic: after pairing it connects through up to three rounds of *stale-session cleanup → mDNS discovery → nmap port scan* against the IP learned during pairing. It never asks you to type an IP or port. On networks that block multicast (where mDNS never resolves), the nmap fallback carries the whole flow.
+
+### Operating
+
+| Command | Description |
+|---|---|
+| `./tablet.sh url` | Pick URL(s), device(s) and a **browser** — it lists the browsers actually installed on each device (Chrome, Firefox, Brave, Edge, Samsung Internet, …) and opens the URLs there |
+| `./tablet.sh cap [name]` | Screenshot → `/tmp/<name>-<timestamp>.png` |
+| `./tablet.sh rec [name]` | Screen recording → `/tmp` (Ctrl+C to stop) |
+| `./tablet.sh logs [name]` | Live Chromium logcat stream |
+| `./tablet.sh clear` | Clear browser cache, cookies and service workers |
+| `./tablet.sh stop` | Force-stop the browser |
+
+`clear` and `stop` target Chrome by default; override with `CHROME=<package> ./tablet.sh clear`.
 
 ## Configuration
-All configuration is managed through environment files.
-## proxy.env
-Controls proxy behavior:
+
+Everything lives in three plain-text env files next to the scripts.
+
+### `proxy.env` — proxy behavior
+
+| Key | Default | Description |
+|---|---|---|
+| `PORT` | `8090` | Port the proxy listens on |
+| `HOST_SPOOF` | `localhost` | `Host` header sent to backends (empty = forward the original) |
+| `CORS` | `on` | Inject permissive CORS headers (`off` to disable) |
+| `ROUTE <prefix> <host:port>` | — | Prefix → backend mapping, one per line; longest prefix wins |
+
+```
+ROUTE /api   127.0.0.1:3000
+ROUTE /      127.0.0.1:5173
+```
+
+If no routes are defined, the proxy falls back to `/chatkit → 127.0.0.1:8000` and `/ → 127.0.0.1:80`.
+
+### `devices.env` — enrolled devices (source of truth)
+
+```
+name | serial | ip:port | type
+```
+
+- `serial` is the hardware serial (`ro.serialno`) — it never changes, so a device is recognized even after its IP or ADB port rotates.
+- `ip:port` is the last known WiFi endpoint (ignored in USB mode).
+- `type` is `usb` or `wifi`.
+
+Devices self-register on successful enrollment. To remove one, delete its line.
+
+### `urls.env` — what to expose
+
+One local URL (or bare port number) per line. Every listed port gets an `adb reverse` tunnel on connect.
+
+```
+http://localhost:5173/#/login
+http://localhost:3000
+8080
+```
+
+> Ports below 1024 cannot be reverse-forwarded on Android. Serve those through the proxy instead (e.g. put port 80 behind a `ROUTE` and expose the proxy's high port).
+
+### Environment overrides
 
 | Variable | Default | Description |
 |---|---|---|
-| PORT | 8090 | Port the proxy listens on |
-| HOST_SPOOF | localhost | Host header value sent to backends |
-| CORS | on | Enable or disable CORS header injection |
-| ROUTE | see below | URL prefix to backend mapping (one per line) |
+| `SCAN_RANGE` | `30000-65535` | Port range nmap scans during WiFi reconnection |
+| `CHROME` | `com.android.chrome` | Browser package used by `clear`/`stop`/`logs` |
 
-Default routes:
+## Troubleshooting
 
-ROUTE /api   127.0.0.1:8000
-ROUTE /      127.0.0.1:80
+**`protocol fault (couldn't read status): Connection reset by peer` during pairing**
+Two `adb` installations are fighting over the server. Keep one: `sudo apt remove -y adb android-tools-adb` (if you use Google platform-tools) or delete the manually installed copy. The startup check reports the conflicting paths and versions.
 
-## devices.env
-Registered Android devices. Format: name | serial | ip:port | type
-## urls.env
-Local URLs to expose on connected tablets (one per line). Ports below 1024 cannot be forwarded via ADB on Android without special permissions and must be accessed through the proxy.
-## Usage## Start the proxy
+**QR pairing succeeds but the connection takes a while**
+Your network is probably blocking mDNS multicast, so discovery falls back to an nmap port scan (~30–60 s). This is expected and automatic. A DHCP reservation for the device on your router makes every later reconnection instant.
 
-./start.sh
+**`wifi` says the device is unreachable**
+Its IP changed or Wireless debugging was switched off. Re-enroll with `./tablet.sh qr <name>` — and consider a DHCP reservation so it stops happening.
 
-This detects your LAN IP, prints the tablet access URL, and starts the proxy.
-## Connect a tablet
-Three exclusive connection modes are available: QR (wireless pairing), USB (permanent cable connection), or WiFi (reconnect to a known endpoint).
+**The tablet shows stale content**
+Almost always a service worker. Run `./tablet.sh clear` and reload.
 
-# First-time USB connection
-./tablet.sh usb my-tablet
-# First-time QR wireless pairing
-./tablet.sh qr my-tablet
-# Reconnect all registered devices
-./tablet.sh
+**`status` warns about a DOUBLE transport**
+The device is connected over USB and WiFi at the same time. Unplug the cable (WiFi mode) or run `./tablet.sh` to let the script normalize the tunnels.
 
-## Utility commands
-These allow direct interaction with connected devices:
+## Project layout
 
-* ./tablet.sh status: Show connection status for all devices.
-* ./tablet.sh url: Open URLs on tablets.
-* ./tablet.sh clear: Clear Chrome cache, cookies, and service workers on the device.
-* ./tablet.sh cap: Take a screenshot.
-* ./tablet.sh logs: Live Chromium logcat stream.
-
-## Access from tablet
-Open the URL provided by the startup script in the tablet's browser:
-
-http://<YOUR-LAN-IP>:8090/App/#/login
-
-Because of the ADB reverse tunnel, the tablet processes localhost services as if they were running locally on its own system.
-## How It Works## Request flow
-
-Tablet Browser
-      |
-      v  http://192.168.x.x:8090/App/
-Proxy (proxy.js)
-      |
-      +---> Backend A (Port :80)     Host header changed to "localhost"
-      +---> Backend B (Port :8000)   Approved CORS headers injected
-      +---> On-the-fly JS bundle rewrite
-      |
-      v  Modified response sent back
-Tablet Browser
-
-## ADB reverse tunnel
-When the tablet connects via ADB, the adb reverse tcp:8090 tcp:8090 command creates a tunnel: any request the tablet makes to its own localhost:8090 is transparently forwarded to the proxy running on the development machine.
-
+```
+tablet.sh          device enrollment, connections, tunnels, device utilities
+proxy.js           zero-dependency HTTP proxy (Node.js)
+start.sh           starts the proxy and prints/QRs the LAN access URL
+proxy.env          proxy port, host spoofing, CORS, routes
+devices.env        enrolled devices registry
+urls.env           local URLs/ports to expose
+DEPENDENCIES.txt   dependency reference and concept primer
+commands.txt       one-page cheatsheet
+```

@@ -1,25 +1,25 @@
 /**
- * Proxy CONFIGURABLE — responsive-proxy
+ * CONFIGURABLE proxy — responsive-proxy
  * --------------------------------------------------------------------------
- * Expone uno o VARIOS backends locales bajo un solo puerto, con host-spoof y
- * CORS. Todo se configura en proxy.env (PORT, HOST_SPOOF, CORS y las RUTAS).
- * No requiere dependencias: solo Node.js.
+ * Exposes one or SEVERAL local backends under a single port, with host-spoof
+ * and CORS. Everything is configured in proxy.env (PORT, HOST_SPOOF, CORS and
+ * the ROUTES). No dependencies required: just Node.js.
  *
- * Como funciona:
- *   - Lee proxy.env: el puerto del proxy y las rutas (prefijo -> host:puerto).
- *   - A cada pedido le elige el backend segun el prefijo (el mas largo gana).
- *   - host-spoof: le reenvia "Host: <HOST_SPOOF>" al backend (ej localhost).
- *   - CORS: inyecta los headers para que el navegador no bloquee.
- *   - Reescritura de bundle (opcional/automatica): solo se aplica si aparece la
- *     marca esperada en el bundle /App/assets/*.js; para otras apps es inofensiva.
+ * How it works:
+ *   - Reads proxy.env: the proxy port and the routes (prefix -> host:port).
+ *   - Picks the backend for each request by prefix (longest one wins).
+ *   - host-spoof: forwards "Host: <HOST_SPOOF>" to the backend (e.g. localhost).
+ *   - CORS: injects the headers so the browser does not block requests.
+ *   - Bundle rewrite (optional/automatic): only applies if the expected marker
+ *     appears in the /App/assets/*.js bundle; harmless for other apps.
  *
- * Uso:  node proxy.js   (o ./start.sh / ./tablet.sh)
+ * Usage:  node proxy.js   (or ./start.sh / ./tablet.sh)
  */
 const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 
-// ---------- cargar proxy.env ----------
+// ---------- load proxy.env ----------
 const cfg = {};
 const routes = [];
 const cfgPath = path.join(__dirname, 'proxy.env');
@@ -28,7 +28,7 @@ if (fs.existsSync(cfgPath)) {
     const l = raw.trim();
     if (!l || l.startsWith('#')) continue;
     if (/^ROUTE\s+/i.test(l)) {
-      const p = l.split(/\s+/);                       // ROUTE <prefijo> <host:puerto>
+      const p = l.split(/\s+/);
       if (p.length >= 3) routes.push({ prefix: p[1], target: p[2] });
     } else {
       const i = l.indexOf('=');
@@ -36,19 +36,16 @@ if (fs.existsSync(cfgPath)) {
     }
   }
 }
-// default = rutas por defecto (si proxy.env no define rutas)
 if (!routes.length) {
   routes.push({ prefix: '/chatkit', target: '127.0.0.1:8000' });
   routes.push({ prefix: '/',        target: '127.0.0.1:80' });
 }
-routes.sort((a, b) => b.prefix.length - a.prefix.length);   // mas especifico primero
+routes.sort((a, b) => b.prefix.length - a.prefix.length);
 
 const LISTEN_PORT = parseInt(cfg.PORT, 10) || 8090;
-const HOST_SPOOF  = (cfg.HOST_SPOOF === undefined) ? 'localhost' : cfg.HOST_SPOOF;  // '' = no spoof
+const HOST_SPOOF  = (cfg.HOST_SPOOF === undefined) ? 'localhost' : cfg.HOST_SPOOF;
 const CORS_ON     = String(cfg.CORS || 'on').toLowerCase() !== 'off';
 
-// Reescritura de bundle (app-specific, opcional): que la app apunte Moodle/chatkit
-// al origen del proxy. Solo actúa si el bundle contiene la marca de REWRITE_FROM.
 const REWRITE_FROM = 'n==="localhost"||n==="127.0.0.1"?xa.localhost:xa.lpv}';
 const REWRITE_TO   =
   '{...xa.localhost,wwwroot:window.location.origin+"/moodle",' +
@@ -118,7 +115,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(LISTEN_PORT, '0.0.0.0', () => {
   console.log('');
-  console.log(`  Proxy corriendo en :${LISTEN_PORT}` + (HOST_SPOOF ? `  (host-spoof: ${HOST_SPOOF})` : '  (sin host-spoof)') + `  CORS:${CORS_ON ? 'on' : 'off'}`);
+  console.log(`  Proxy running on :${LISTEN_PORT}` + (HOST_SPOOF ? `  (host-spoof: ${HOST_SPOOF})` : '  (no host-spoof)') + `  CORS:${CORS_ON ? 'on' : 'off'}`);
   routes.forEach(r => console.log(`    ${r.prefix.padEnd(12)} -> ${r.target}`));
   console.log(`  App:  http://localhost:${LISTEN_PORT}/App/#/login`);
   console.log('');

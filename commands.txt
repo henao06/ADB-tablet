@@ -1,0 +1,44 @@
+================  tablet.sh — cheatsheet  ================
+cd /home/sebastian/ADB-tablet
+
+--- CONNECT (one tablet = ONE single transport) ---
+  ./tablet.sh usb    [name]   permanent cable    -> USB runtime   (most stable)
+  ./tablet.sh qr     [name]   QR pairing         -> WiFi runtime
+  ./tablet.sh wifi   [name]   known endpoint     -> WiFi runtime
+  ./tablet.sh use             numbered menu: pick a tablet / change its type
+  ./tablet.sh                 reconnects ALL according to their saved type
+  ./tablet.sh status          see each tablet and how it is connected
+
+--- OPERATE ---
+  ./tablet.sh cap    [name]   screenshot -> /tmp/<tablet>-<date>.png
+  ./tablet.sh url             pick URL(s) (e.g. 1 3 4) + tablet(s) (e.g. 1 2 or 'all')
+                              then pick the browser (it lists the ones installed on the device)
+
+--- DEBUG / CHROME ---
+  ./tablet.sh clear           clears Chrome cache+cookies+SERVICE WORKER (one/several/'all')
+  ./tablet.sh stop            closes Chrome (one/several/'all')
+  ./tablet.sh logs   [name]   live Chromium logcat (Ctrl+C to exit)
+  ./tablet.sh rec    [name]   records the screen -> /tmp (Ctrl+C to stop, max 180s)
+
+-------------------------------------------------------
+FIRST TIME
+  deps: ./tablet.sh setup   (installs everything missing: adb, node, nmap, ...)
+  USB : plug in the cable  ->  ./tablet.sh usb
+  QR  : tablet -> Wireless debugging -> "Pair with QR"  ->  ./tablet.sh qr
+
+ON THE TABLET (Chrome): open the SAME url as on your local machine
+  http://localhost:5173/#/login
+  http://localhost:5050
+
+UNPAIR / START FROM SCRATCH
+  delete the line in devices.env  (or empty the file)  +  adb disconnect
+
+-------------------------------------------------------
+NOTES
+  - USB = cable plugged in, the tunnel travels over the cable (does not drop with WiFi).
+  - WiFi = do not leave the cable plugged in or the tunnel sticks to USB (UsbFfs).
+  - 'clear' is your friend: if the tablet shows something old/cached, it is
+    almost always the service worker -> ./tablet.sh clear and reload.
+  - Port 80 (Moodle) can NOT be reverse-forwarded by adb -> it goes through the Vite proxy.
+  - devices.env -> source of truth: name | serial | ip:port | type(usb|wifi)
+=======================================================
