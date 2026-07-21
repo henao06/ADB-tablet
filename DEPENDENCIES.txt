@@ -1,16 +1,18 @@
 ============================================================================
  DEPENDENCIES — Responsiveness proxy + access from tablets (Android)
 ============================================================================
- System: Ubuntu / Debian (apt package manager).
- On another distro, replace "sudo apt install" with your manager (dnf, pacman, etc.).
+ System: LINUX ONLY. Ubuntu / Debian (apt), Fedora (dnf) or Arch (pacman).
+ macOS and native Windows are not supported.
 ----------------------------------------------------------------------------
 
  INSTALL EVERYTHING AT ONCE (the easiest way):
 
-     ./tablet.sh setup
+     ./setup.sh
 
- It detects your package manager (apt/dnf/pacman) and installs ONLY what is
- missing. Manual equivalent on Ubuntu/Debian:
+ It detects your package manager (apt/dnf/pacman), installs ONLY what is
+ missing, then installs Rust, builds the terminal console and creates the
+ 'tab' launcher. Idempotent: safe to re-run. Use --no-ui to skip Rust.
+ Manual equivalent on Ubuntu/Debian:
 
      sudo apt update && sudo apt install -y nodejs android-tools-adb nmap curl qrencode
      npm i -g pm2

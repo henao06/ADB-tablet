@@ -15,9 +15,15 @@
 #   ./tablet.sh clear          -> clears Chrome cache/cookies/service-worker
 #   ./tablet.sh stop           -> closes Chrome
 #   ./tablet.sh logs   [name]  -> live Chromium logcat
-#   ./tablet.sh rec    [name]  -> records the screen to /tmp (Ctrl+C to stop)
+#   ./tablet.sh rec  [name] [s] -> records the screen to /tmp (Ctrl+C or after [s] seconds)
+#   ./tablet.sh size   [preset] -> emulate other screen sizes (phone, fold, ...) or reset
+#   ./tablet.sh inspect [name] -> Chrome DevTools bridge for the device browser
+#   ./tablet.sh rm             -> pick device(s) and remove them from the registry
+#   ./tablet.sh proxy [cmd]    -> proxy control: start | stop | status | logs
+#   ./tablet.sh off    [name]  -> disconnects one tablet, or EVERYTHING (+proxy +adb)
 #   ./tablet.sh                -> reconnects ALL tablets according to their saved type
-#   ./tablet.sh setup          -> installs every missing dependency (apt/dnf/pacman)
+#   ./tablet.sh setup          -> full installer (./setup.sh: deps + Rust + console)
+#   ./tablet.sh ui             -> full-screen interactive console (builds on first run)
 #
 # Why "one transport at a time": the `adb reverse` tunnel is BOUND to ONE
 # transport. If USB and WiFi are connected at the same time, the reverse sticks
@@ -67,6 +73,10 @@ check_adb_conflict() {
   echo ""
 }
 check_deps() {
+  if [ "$(uname -s)" != "Linux" ]; then
+    echo "  [x] this toolkit runs on Linux only (detected: $(uname -s))."
+    exit 1
+  fi
   local ok=1
   require adb  "pairs/connects the tablet and creates the reverse tunnel" "sudo apt install -y android-tools-adb" || ok=0
   require node "runs the proxy (proxy.js) on port $PROXY_PORT"            "sudo apt install -y nodejs"            || ok=0
@@ -74,76 +84,13 @@ check_deps() {
   suggest nmap         "auto-reconnect: rescans the tablet when the adb port rotates" "sudo apt install -y nmap"
   suggest qrencode     "prints the QR to pair the tablet / open the app"              "sudo apt install -y qrencode"
   suggest avahi-browse "QR mode discovery (mDNS)"                                     "sudo apt install -y avahi-utils"
-  check_adb_conflict
   if [ "$ok" = 0 ]; then
     echo ""
-    echo "  Install EVERYTHING at once (see DEPENDENCIES.txt):"
-    echo "      sudo apt update && sudo apt install -y nodejs android-tools-adb nmap curl qrencode"
+    echo "  Install EVERYTHING at once (deps + Rust + console, see DEPENDENCIES.txt):"
+    echo "      ./setup.sh"
     exit 1
   fi
 }
-mode_setup() {
-  echo "  -- SETUP: install every dependency in one shot --"
-  local mgr="" c p ok=1
-  command -v apt >/dev/null 2>&1 && mgr=apt
-  [ -z "$mgr" ] && command -v dnf >/dev/null 2>&1 && mgr=dnf
-  [ -z "$mgr" ] && command -v pacman >/dev/null 2>&1 && mgr=pacman
-  local -a pkgs=()
-  for c in adb node curl nmap qrencode avahi-browse; do
-    command -v "$c" >/dev/null 2>&1 && continue
-    case "$mgr:$c" in
-      apt:adb)             p=android-tools-adb ;;
-      apt:avahi-browse)    p=avahi-utils ;;
-      dnf:adb|pacman:adb)  p=android-tools ;;
-      dnf:avahi-browse)    p=avahi-tools ;;
-      pacman:avahi-browse) p=avahi ;;
-      *:node)              p=nodejs ;;
-      *)                   p="$c" ;;
-    esac
-    pkgs+=("$p")
-  done
-  if [ "${#pkgs[@]}" -eq 0 ]; then
-    echo "  Everything is already installed:"
-    for c in adb node curl nmap qrencode avahi-browse; do echo "    [OK] $c -> $(command -v "$c")"; done
-    check_adb_conflict
-    return 0
-  fi
-  echo "  Missing: ${pkgs[*]}"
-  local cmd=""
-  case "$mgr" in
-    apt)    cmd="apt update && apt install -y ${pkgs[*]}" ;;
-    dnf)    cmd="dnf install -y ${pkgs[*]}" ;;
-    pacman) cmd="pacman -S --needed --noconfirm ${pkgs[*]}" ;;
-    *)      echo "  [x] no supported package manager found (apt/dnf/pacman)."
-            echo "      Install these manually: ${pkgs[*]}  (see DEPENDENCIES.txt)"
-            return 1 ;;
-  esac
-  local SUDO="sudo"
-  [ "$(id -u)" -eq 0 ] && SUDO=""
-  if [ -n "$SUDO" ] && ! command -v sudo >/dev/null 2>&1; then
-    echo "  [x] you are not root and 'sudo' is not available."
-    echo "      Run the install as root, then re-run ./tablet.sh setup to verify:"
-    echo "        su -c \"$cmd\""
-    return 1
-  fi
-  echo "  Installing with $mgr (you may be asked for your password)..."
-  if ! $SUDO sh -c "$cmd"; then
-    echo "  [x] installation failed."
-    echo "      If it was a permissions problem (sudo rejected your user), run it as root:"
-    echo "        su -c \"$cmd\""
-    echo "      or add your user to sudoers and retry:"
-    echo "        su -c \"usermod -aG sudo $USER\"   (log out and back in, then ./tablet.sh setup)"
-    return 1
-  fi
-  echo ""
-  echo "  Verifying:"
-  for c in adb node curl nmap qrencode avahi-browse; do
-    command -v "$c" >/dev/null 2>&1 && echo "    [OK] $c" || { echo "    [x] $c still missing"; ok=0; }
-  done
-  check_adb_conflict
-  [ "$ok" = 1 ] && echo "  Done. Enroll your first tablet with:  ./tablet.sh usb   or   ./tablet.sh qr"
-}
-
 case "${1:-}" in setup|help|-h|--help) : ;; *) check_deps ;; esac
 [ -f "$ENVF" ] || printf '# name | serial | ip:port | type (usb|wifi)\n' > "$ENVF"
 [ -f "$URLF" ] || printf '# Local URLs/ports to expose (one per line)\nhttp://localhost:%s/App/#/login\n' "$PROXY_PORT" > "$URLF"
@@ -151,7 +98,18 @@ case "${1:-}" in setup|help|-h|--help) : ;; *) check_deps ;; esac
 env_lines()  { grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$ENVF"; }
 url_lines()  { grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$URLF"; }
 trim()       { echo "$1" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g'; }
-hw_serial()  { adb -s "$1" shell getprop ro.serialno 2>/dev/null | tr -d '\r\n'; }
+
+HWCACHE="${TMPDIR:-/tmp}/tablet-sh-hw.cache"
+find "$HWCACHE" -mmin +60 -delete 2>/dev/null
+hw_serial() {
+  local id="$1" hw
+  hw="$(awk -v i="$id" '$1==i{print $2;exit}' "$HWCACHE" 2>/dev/null)"
+  if [ -z "$hw" ]; then
+    hw="$(adb -s "$id" shell getprop ro.serialno 2>/dev/null | tr -d '\r\n')"
+    [ -n "$hw" ] && printf '%s %s\n' "$id" "$hw" >> "$HWCACHE"
+  fi
+  printf '%s\n' "$hw"
+}
 
 extract_port() {
   local s; s="$(echo "$1" | tr -d '[:space:]')"
@@ -192,13 +150,19 @@ upsert_device() {
     "$ENVF" > "$tmp" && mv "$tmp" "$ENVF"
 }
 
+is_net_serial() {
+  case "$1" in
+    *:*|*._adb-tls-connect._tcp|*._adb._tcp) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 transport_for() {
   local d state _ hw
   while read -r d state _; do
     [ "$state" = "device" ] || continue
     case "$2" in
-      usb) [[ "$d" == *:* ]] && continue ;;
-      net) [[ "$d" == *:* ]] || continue ;;
+      usb) is_net_serial "$d" && continue ;;
+      net) is_net_serial "$d" || continue ;;
     esac
     hw="$(hw_serial "$d")"
     [ "$hw" = "$1" ] && { echo "$d"; return 0; }
@@ -246,16 +210,104 @@ device_wifi_ip() {
   echo "$ip"
 }
 
+proxy_up() { curl -s -o /dev/null --max-time 2 "http://localhost:$PROXY_PORT/"; }
 ensure_proxy() {
   exposed_ports | grep -qx "$PROXY_PORT" || return 0
-  if curl -s -o /dev/null --max-time 3 "http://localhost:$PROXY_PORT/App/"; then
+  if proxy_up; then
     echo "  Proxy OK (:$PROXY_PORT)"; return 0
   fi
   echo "  Starting the proxy (:$PROXY_PORT)..."
   nohup node proxy.js >/tmp/responsive-proxy.log 2>&1 &
   sleep 1
-  curl -s -o /dev/null --max-time 3 "http://localhost:$PROXY_PORT/App/" \
-    && echo "  Proxy OK (:$PROXY_PORT)" || echo "  [!] proxy not responding (tail /tmp/responsive-proxy.log)"
+  proxy_up && echo "  Proxy OK (:$PROXY_PORT)" || echo "  [!] proxy not responding (see: ./tablet.sh proxy logs)"
+}
+mode_proxy() {
+  case "${1:-status}" in
+    start)
+      if proxy_up; then echo "  Proxy already running (:$PROXY_PORT)"; return 0; fi
+      echo "  Starting the proxy (:$PROXY_PORT)..."
+      nohup node proxy.js >/tmp/responsive-proxy.log 2>&1 &
+      sleep 1
+      proxy_up && echo "  Proxy OK (:$PROXY_PORT)" || { echo "  [x] proxy did not come up (see: ./tablet.sh proxy logs)"; return 1; } ;;
+    stop)
+      if pkill -f "node proxy.js" 2>/dev/null; then echo "  Proxy stopped."; else echo "  Proxy was not running."; fi ;;
+    logs)
+      if [ -f /tmp/responsive-proxy.log ]; then tail -n 40 /tmp/responsive-proxy.log; else echo "  no log yet (/tmp/responsive-proxy.log)"; fi ;;
+    status)
+      if proxy_up; then
+        echo "  Proxy running (:$PROXY_PORT)  pid: $(pgrep -f 'node proxy.js' | head -1)"
+      else
+        echo "  Proxy NOT running -> start it with:  ./tablet.sh proxy start"
+      fi ;;
+    *)
+      echo "  usage: ./tablet.sh proxy [ start | stop | status | logs ]"; return 1 ;;
+  esac
+}
+mode_rm() {
+  local -a recs=(); local rec name serial ep tipo t tmp
+  if [ -n "${1:-}" ]; then
+    rec="$(one_device "$1")" || return 1
+    recs+=("$rec")
+  else
+    while IFS= read -r rec; do [ -n "$rec" ] && recs+=("$rec"); done < <(pick_devices)
+  fi
+  [ "${#recs[@]}" -eq 0 ] && { echo "  nothing selected."; return 1; }
+  for rec in "${recs[@]}"; do
+    IFS='|' read -r name serial ep tipo <<<"$rec"
+    clear_reverses "$serial"
+    t="$(transport_for "$serial" net)"
+    [ -n "$t" ] && adb disconnect "$t" >/dev/null 2>&1
+    tmp="$(mktemp)"
+    awk -F'|' -v s="$serial" '
+      /^[[:space:]]*#/ || /^[[:space:]]*$/ { print; next }
+      { ser=$2; gsub(/[[:space:]]/,"",ser); if (ser!=s) print }' \
+      "$ENVF" > "$tmp" && mv "$tmp" "$ENVF"
+    echo "  removed: $name ($serial) — tunnels cleared, WiFi disconnected"
+  done
+}
+mode_off() {
+  local name serial ep tipo any=0
+  if [ -n "${1:-}" ]; then
+    local rec t
+    rec="$(record_by_name "$1")"
+    [ -z "$rec" ] && { echo "  [x] no tablet named '$1' in $ENVF (check with: ./tablet.sh status)"; return 1; }
+    IFS='|' read -r name serial ep tipo <<<"$rec"
+    echo "  -- OFF $name: tunnels + WiFi adb for this device only (proxy and adb server stay up) --"
+    clear_reverses "$serial"
+    echo "  $name: reverse tunnels removed"
+    t="$(transport_for "$serial" net)"
+    if [ -n "$t" ]; then
+      adb disconnect "$t" >/dev/null 2>&1
+      echo "  $name: WiFi adb connection dropped ($t)"
+    else
+      echo "  $name: no WiFi adb connection to drop"
+    fi
+    echo "  Reconnect anytime with:  ./tablet.sh wifi $name"
+    return 0
+  fi
+  echo "  -- OFF: tearing down every connection (enrollment in $ENVF is kept) --"
+  while IFS='|' read -r name serial ep tipo; do
+    any=1
+    clear_reverses "$serial"
+    echo "  $name: reverse tunnels removed"
+  done < <(registry_recs)
+  [ "$any" = 1 ] || echo "  no tablets in $ENVF -> no tunnels to remove"
+  local d net=0
+  while read -r d _; do
+    [ -n "$d" ] && is_net_serial "$d" && { net=1; break; }
+  done < <(adb devices 2>/dev/null | tail -n +2)
+  if [ "$net" = 1 ]; then
+    adb disconnect >/dev/null 2>&1
+    echo "  WiFi adb connections dropped"
+  else
+    echo "  no WiFi adb connections to drop"
+  fi
+  mode_proxy stop
+  adb kill-server >/dev/null 2>&1
+  echo "  adb server stopped (port 5037 no longer listening)"
+  echo ""
+  echo "  Everything is down. Reconnect anytime with:  ./tablet.sh wifi   or   ./tablet.sh usb"
+  return 0
 }
 print_urls() {
   echo ""
@@ -362,7 +414,8 @@ try_connect_ep() {
 }
 any_net_device() {
   local d
-  for d in $(adb devices 2>/dev/null | awk '/\tdevice$/{print $1}' | grep ':'); do
+  for d in $(adb devices 2>/dev/null | awk '/\tdevice$/{print $1}'); do
+    is_net_serial "$d" || continue
     [ -n "$(hw_serial "$d")" ] && { echo "$d"; return 0; }
   done
   return 1
@@ -450,10 +503,13 @@ mode_usb() {
   echo "  1) Plug the tablet in via USB and LEAVE the cable connected."
   echo "  2) Accept 'Allow USB debugging' (check 'always')."
   echo ""
-  local d hw tries=0 warned=0
+  local d hw tries=0 warned=0 cand
   echo "  Waiting for an authorized USB device..."
   while :; do
-    d="$(adb devices | awk -F'\t' '$2=="device"{print $1}' | grep -v ':' | head -1)"
+    d=""
+    for cand in $(adb devices | awk -F'\t' '$2=="device"{print $1}'); do
+      is_net_serial "$cand" || { d="$cand"; break; }
+    done
     [ -n "$d" ] && break
     if [ "$warned" = 0 ] && adb devices | grep -q 'unauthorized'; then
       echo "  [!] Showing 'unauthorized' -> accept the dialog on the tablet."; warned=1
@@ -503,7 +559,11 @@ wifi_one() {
   fi
   usbser="$(transport_for "$hw" usb)"
   [ -n "$usbser" ] && echo "   [!] a USB cable is connected ($usbser). In WiFi mode you should unplug it."
-  upsert_device "$name" "$hw" "$netser" "wifi"
+  if [[ "$netser" == *:* ]]; then
+    upsert_device "$name" "$hw" "$netser" "wifi"
+  else
+    upsert_device "$name" "$hw" "$ep" "wifi"
+  fi
   clear_reverses "$hw"
   activate "$netser" "$name" "wifi"
   return 0
@@ -562,6 +622,7 @@ mode_status() {
   done < <(registry_recs)
   echo "  --- URLs to expose ($URLF) ---"; url_lines | while read -r l; do echo "    $(trim "$l")"; done
   echo "  --- adb devices ---"; adb devices | tail -n +2
+  check_adb_conflict
 }
 
 reconnect_all() {
@@ -576,7 +637,14 @@ reconnect_all() {
       clear_reverses "$serial"
       activate "$usbser" "$name" "usb"
     else
-      wifi_one "$name" "$serial" "$ep" || true
+      if ! wifi_one "$name" "$serial" "$ep"; then
+        usbser="$(transport_for "$serial" usb)"
+        if [ -n "$usbser" ]; then
+          echo "   [!] $name: WiFi unreachable but the USB cable is plugged in -> using USB for now."
+          clear_reverses "$serial"
+          activate "$usbser" "$name" "usb"
+        fi
+      fi
     fi
   done < <(registry_recs)
   [ "$any" = "1" ] || echo "  (no tablets in $ENVF -> enroll with ./tablet.sh qr  or  ./tablet.sh usb)"
@@ -658,6 +726,15 @@ open_url() {
 }
 
 mode_url() {
+  if [ -n "${1:-}" ] && [ -n "${2:-}" ]; then
+    local rec name serial ep tipo d
+    rec="$(one_device "$1")" || return 1
+    IFS='|' read -r name serial ep tipo <<<"$rec"
+    d="$(resolve_transport "$(trim "$serial")")"
+    [ -z "$d" ] && { echo "  [x] $1 is not connected."; return 1; }
+    if open_url "$d" "$2" "${3:-}"; then echo "  OK  -> $2"; else echo "  [x] -> $2"; return 1; fi
+    return 0
+  fi
   local -a urls=() picks=()
   local l i usel n url
   while read -r l; do l="$(trim "$l")"; [ -n "$l" ] && urls+=("$l"); done < <(url_lines)
@@ -716,7 +793,12 @@ one_device() {
 
 mode_clear() {
   local -a recs=(); local rec name serial ep tipo d ok=0
-  while IFS= read -r rec; do [ -n "$rec" ] && recs+=("$rec"); done < <(pick_devices)
+  if [ -n "${1:-}" ]; then
+    rec="$(one_device "$1")" || return 1
+    recs+=("$rec")
+  else
+    while IFS= read -r rec; do [ -n "$rec" ] && recs+=("$rec"); done < <(pick_devices)
+  fi
   [ "${#recs[@]}" -eq 0 ] && { echo "  you did not pick a device."; return 1; }
   for rec in "${recs[@]}"; do
     IFS='|' read -r name serial ep tipo <<<"$rec"; serial="$(trim "$serial")"
@@ -731,7 +813,12 @@ mode_clear() {
 
 mode_stop() {
   local -a recs=(); local rec name serial ep tipo d
-  while IFS= read -r rec; do [ -n "$rec" ] && recs+=("$rec"); done < <(pick_devices)
+  if [ -n "${1:-}" ]; then
+    rec="$(one_device "$1")" || return 1
+    recs+=("$rec")
+  else
+    while IFS= read -r rec; do [ -n "$rec" ] && recs+=("$rec"); done < <(pick_devices)
+  fi
   [ "${#recs[@]}" -eq 0 ] && { echo "  you did not pick a device."; return 1; }
   for rec in "${recs[@]}"; do
     IFS='|' read -r name serial ep tipo <<<"$rec"; serial="$(trim "$serial")"
@@ -752,39 +839,143 @@ mode_logs() {
 }
 
 mode_rec() {
-  local rec name serial ep tipo d ts remote out
+  local rec name serial ep tipo d ts remote out secs="${2:-}"
   rec="$(one_device "${1:-}")" || return 1
   IFS='|' read -r name serial ep tipo <<<"$rec"; name="$(trim "$name")"; serial="$(trim "$serial")"
   d="$(resolve_transport "$serial")"
   [ -z "$d" ] && { echo "  [x] $name not connected."; return 1; }
+  if [ -n "$secs" ] && ! [[ "$secs" =~ ^[0-9]+$ ]]; then
+    echo "  [x] duration must be seconds, e.g.:  ./tablet.sh rec $name 30"; return 1
+  fi
   ts="$(date +%Y%m%d-%H%M%S)"; remote="/sdcard/rec-${ts}.mp4"; out="/tmp/${name}-${ts}.mp4"
-  echo "  Recording $name ... (Ctrl+C to stop, max 180s)"
+  if [ -n "$secs" ]; then
+    echo "  Recording $name for ${secs}s ..."
+  else
+    echo "  Recording $name ... (Ctrl+C to stop, max 180s)"
+  fi
   trap ':' INT
-  adb -s "$d" shell screenrecord "$remote"
+  adb -s "$d" shell screenrecord ${secs:+--time-limit "$secs"} ${REC_BITRATE:+--bit-rate "$REC_BITRATE"} "$remote"
   trap - INT
   sleep 2
-  adb -s "$d" pull "$remote" "$out" >/dev/null 2>&1 && echo "  video -> $out" || echo "  [x] could not pull the video"
+  if adb -s "$d" pull "$remote" "$out" >/dev/null 2>&1; then
+    echo "  video -> $out ($(du -h "$out" 2>/dev/null | cut -f1))"
+  else
+    echo "  [x] could not pull the video"
+  fi
   adb -s "$d" shell rm -f "$remote" >/dev/null 2>&1
 }
 
+SIZE_PRESETS="phone|1080x2400|420
+phone-small|720x1600|320
+tablet-8|1200x1920|320
+tablet-10|1800x2560|320
+fold-open|1812x2176|420"
+
+mode_size() {
+  local a1="${1:-}" a2="${2:-}" a3="${3:-}" preset="" res="" den="" name="" line sel
+  case "$a1" in
+    "")    ;;
+    reset) preset="reset"; name="$a2" ;;
+    *x*)   res="$a1"
+           if [[ "$a2" =~ ^[0-9]+$ ]]; then den="$a2"; name="$a3"; else name="$a2"; fi
+           [ -z "$den" ] && { echo "  [x] custom size needs a density too:  ./tablet.sh size ${res} <dpi> [name]"; return 1; } ;;
+    *)     line="$(awk -F'|' -v p="$a1" '$1==p{print;exit}' <<<"$SIZE_PRESETS")"
+           if [ -n "$line" ]; then preset="$a1"; IFS='|' read -r _ res den <<<"$line"; name="$a2"
+           else name="$a1"; fi ;;
+  esac
+  if [ -z "$preset$res" ]; then
+    echo "  Size presets (turn one device into many):"
+    local i=1 pn pr pd
+    local -a plines=()
+    while IFS= read -r line; do plines+=("$line"); done <<<"$SIZE_PRESETS"
+    for line in "${plines[@]}"; do
+      IFS='|' read -r pn pr pd <<<"$line"
+      printf "    %d) %-12s %s @ %s dpi\n" "$i" "$pn" "$pr" "$pd"; i=$((i+1))
+    done
+    echo "    0) reset (back to the device's native screen)"
+    read -rp "  Pick [0]: " sel
+    sel="${sel:-0}"
+    if [ "$sel" = "0" ]; then preset="reset"
+    elif [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#plines[@]}" ]; then
+      IFS='|' read -r preset res den <<<"${plines[$((sel-1))]}"
+    else echo "  invalid selection."; return 1; fi
+  fi
+  local rec serial d
+  rec="$(one_device "$name")" || return 1
+  IFS='|' read -r name serial _ <<<"$rec"; name="$(trim "$name")"; serial="$(trim "$serial")"
+  d="$(resolve_transport "$serial")"
+  [ -z "$d" ] && { echo "  [x] $name not connected (run ./tablet.sh first)."; return 1; }
+  if [ "$preset" = "reset" ]; then
+    adb -s "$d" shell wm size reset >/dev/null 2>&1
+    adb -s "$d" shell wm density reset >/dev/null 2>&1
+    echo "  $name: native size and density restored."
+  else
+    adb -s "$d" shell wm size "$res" >/dev/null 2>&1
+    adb -s "$d" shell wm density "$den" >/dev/null 2>&1
+    echo "  $name is now emulating '${preset:-custom}': $res @ $den dpi"
+    echo "  Undo anytime with:  ./tablet.sh size reset"
+  fi
+  echo "  Reported by the device:"
+  adb -s "$d" shell wm size 2>/dev/null | tr -d '\r' | sed 's/^/    /'
+  adb -s "$d" shell wm density 2>/dev/null | tr -d '\r' | sed 's/^/    /'
+}
+
+mode_inspect() {
+  local rec name serial d port="${INSPECT_PORT:-9222}"
+  rec="$(one_device "${1:-}")" || return 1
+  IFS='|' read -r name serial _ <<<"$rec"; name="$(trim "$name")"; serial="$(trim "$serial")"
+  d="$(resolve_transport "$serial")"
+  [ -z "$d" ] && { echo "  [x] $name not connected (run ./tablet.sh first)."; return 1; }
+  adb -s "$d" forward "tcp:$port" localabstract:chrome_devtools_remote >/dev/null 2>&1 \
+    || { echo "  [x] could not create the DevTools forward on tcp:$port (busy? set INSPECT_PORT=<port>)"; return 1; }
+  echo "  DevTools bridge ready for $name ($d):"
+  echo "    A) full UI + screencast: open  chrome://inspect/#devices  in desktop Chrome"
+  echo "    B) raw endpoint:         http://localhost:$port/json  (works from any tool)"
+  echo "  The browser must be RUNNING on the device (Chromium-based, e.g. Chrome)."
+  echo "  Stop the bridge with:  adb -s $d forward --remove tcp:$port"
+}
+
+mode_ui() {
+  local bin="tablet-ui/target/release/tablet-ui"
+  if [ ! -x "$bin" ]; then
+    if command -v cargo >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/cargo" ]; then
+      echo "  Building the interactive console (first time only)..."
+      (cd tablet-ui && PATH="$HOME/.cargo/bin:$PATH" cargo build --release) || return 1
+    else
+      echo "  [x] the console is not built and Rust (cargo) is missing."
+      echo "      Install Rust:  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+      echo "      then run:      ./tablet.sh ui"
+      return 1
+    fi
+  fi
+  exec "$bin"
+}
+
 case "${1:-}" in
-  setup)  mode_setup ;;
+  setup)  [ -x ./setup.sh ] || { echo "  [x] setup.sh not found next to tablet.sh"; exit 1; }
+          exec ./setup.sh "${2:-}" ;;
+  ui)     mode_ui ;;
   qr)     mode_qr "${2:-}"   && { ensure_proxy; print_urls; } ;;
   usb)    mode_usb "${2:-}"  && { ensure_proxy; print_urls; } ;;
   wifi)   ensure_proxy; mode_wifi "${2:-}" && print_urls ;;
   use)    mode_use ;;
   status) mode_status ;;
   cap)    mode_cap "${2:-}" ;;
-  url)    mode_url ;;
-  clear)  mode_clear ;;
-  stop)   mode_stop ;;
+  url)    mode_url "${2:-}" "${3:-}" "${4:-}" ;;
+  clear)  mode_clear "${2:-}" ;;
+  stop)   mode_stop "${2:-}" ;;
   logs)   mode_logs "${2:-}" ;;
-  rec)    mode_rec "${2:-}" ;;
+  rec)    mode_rec "${2:-}" "${3:-}" ;;
+  size)   mode_size "${2:-}" "${3:-}" "${4:-}" ;;
+  inspect) mode_inspect "${2:-}" ;;
+  rm)     mode_rm "${2:-}" ;;
+  proxy)  mode_proxy "${2:-}" ;;
+  off)    mode_off "${2:-}" ;;
   "")     ensure_proxy; reconnect_all; print_urls ;;
   -h|--help|help)
     grep -E '^#( |=)' "$0" | sed -E 's/^# ?//' | head -40 ;;
   *)
     echo "  [x] unknown command: '$1'"
-    echo "      usage: ./tablet.sh [ setup | qr | usb | wifi | use | status | cap | url | clear | stop | logs | rec ]"
+    echo "      usage: ./tablet.sh [ setup | qr | usb | wifi | use | status | cap | url | size | inspect | rm | proxy | off | clear | stop | logs | rec ]"
     exit 1 ;;
 esac
