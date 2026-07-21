@@ -1,0 +1,155 @@
+============================================================================
+ DEPENDENCIES — ADB Tablet Proxy (expose local dev servers to real devices)
+============================================================================
+ System: LINUX ONLY. Ubuntu / Debian (apt), Fedora (dnf) or Arch (pacman).
+ macOS and native Windows are not supported.
+----------------------------------------------------------------------------
+
+ INSTALL EVERYTHING AT ONCE (the easiest way):
+
+     ./setup.sh
+
+ It detects your package manager (apt/dnf/pacman), installs ONLY what is
+ missing, then installs Rust, builds the terminal console and creates the
+ 'tab' launcher. Idempotent: safe to re-run. Use --no-ui to skip Rust and
+ the console (the shell scripts alone are fully functional).
+
+ Manual equivalent on Ubuntu/Debian:
+
+     sudo apt update && sudo apt install -y adb nodejs curl nmap qrencode avahi-utils
+
+ (Rust is only needed for the optional terminal console; setup.sh installs it
+  through the official rustup script. Skip it with ./setup.sh --no-ui.)
+
+
+ VERIFY THAT EVERYTHING IS THERE:
+
+     for c in adb node curl nmap qrencode avahi-browse; do command -v $c >/dev/null \
+       && echo "[OK] $c" || echo "[MISSING] $c"; done
+
+----------------------------------------------------------------------------
+ DETAIL OF EACH ONE
+----------------------------------------------------------------------------
+
+ 1) Node.js
+    What it is for : runs the proxy (proxy/proxy.js) on port 8090.
+    Install        : sudo apt install -y nodejs
+    Verify         : node --version
+
+ 2) adb  (package: adb on apt; android-tools on dnf/pacman)
+    What it is for : pairs and connects the device over USB or WiFi, and sets
+                     up the 'reverse' tunnel that lets the device see the
+                     machine's localhost (e.g. localhost:8090).
+    Install        : sudo apt install -y adb
+    Verify         : adb version
+    WARNING        : keep only ONE adb install. If you have both the distro
+                     package (/usr/bin/adb) and Google platform-tools
+                     (~/.local/bin/adb), their clients kill each other's
+                     server and you get 'protocol fault / connection reset'
+                     during pairing. Keep the newest and remove the other:
+                     sudo apt remove -y adb   (or delete the platform-tools copy)
+
+ 3) nmap
+    What it is for : automatic reconnection. Scans the device's IP to find
+                     the new adb port when it rotates (e.g. after a reboot).
+    Install        : sudo apt install -y nmap
+    Verify         : nmap --version
+
+ 4) curl
+    What it is for : the scripts check that the proxy and the backends respond;
+                     also used to download the Rust installer during setup.
+    Install        : sudo apt install -y curl
+    Verify         : curl --version
+
+ 5) qrencode
+    What it is for : renders the QR codes (./sh/tablet.sh qr and ./sh/start.sh)
+                     so you can pair or open the app by scanning with the device.
+    Install        : sudo apt install -y qrencode
+    Verify         : qrencode --version
+
+ 6) avahi-browse  (package: avahi-utils on apt; avahi-tools on dnf; avahi on pacman)
+    What it is for : mDNS discovery for QR pairing. QR enrollment finds the
+                     device's pairing/connect endpoints over mDNS. RECOMMENDED.
+    Install        : sudo apt install -y avahi-utils
+    Verify         : avahi-browse --version
+    NOTE           : on networks that block multicast, mDNS may never resolve,
+                     so QR pairing can fail to complete. In that case enroll
+                     over USB instead:  ./sh/tablet.sh usb <name>
+
+ 7) Rust toolchain  (OPTIONAL — only for the terminal console)
+    What it is for : builds tablet-ui/, the optional full-screen console.
+                     The shell scripts work without it.
+    Install        : setup.sh installs it via https://sh.rustup.rs (minimal).
+                     Skip entirely with:  ./setup.sh --no-ui
+    Verify         : cargo --version
+
+ (awk, sed, grep and bash ship with any Linux: NO need to install them.)
+
+----------------------------------------------------------------------------
+ WHAT YOU EXPOSE  (your own local servers — nothing is installed here)
+----------------------------------------------------------------------------
+
+   This toolkit only forwards to servers you already run on your PC. Point it
+   at whatever you are developing, for example:
+
+     - a web app on            port 80
+     - an API / backend on     port 3000
+     - a dev server (vite, ...) on port 5173
+
+   List the local URLs or bare ports you want to reach in config/urls.env;
+   each one gets an 'adb reverse' tunnel on connect. Ports below 1024 cannot
+   be reverse-forwarded on Android — put those behind a ROUTE in
+   config/proxy.env and expose the proxy's high port instead.
+
+----------------------------------------------------------------------------
+ NOTE
+----------------------------------------------------------------------------
+
+   - Optional but recommended: set a DHCP RESERVATION for the device on the
+     router, so its IP never changes. That makes reconnection flawless.
+============================================================================
+
+
+                                  CONCEPTS
+
+  - IP = the address of a house in the neighborhood. For example
+    192.168.1.50 = your PC, 192.168.1.51 = the device.
+  - Port = the specific DOOR of that house. One house (IP) has many doors:
+    80 (a web app), 3000 (an API), 8090 (the proxy).
+  - localhost = "MY own house". When any device says "localhost", it means
+    itself. It is the magic word for "in here, me".
+  - Serial = the device's ID card number (e.g. <your-device-serial>). It NEVER
+    changes -> we recognize the device even if its IP or port changes.
+
+  The CONNECTION with the device
+
+  - adb = the Android remote control for devs. Lets you talk to the device
+    from the PC.
+  - adb reverse = a tunnel: it makes the DEVICE's localhost:8090 door actually
+    lead to your PC. That is why the device "believes" the proxy is its own
+    (it sees localhost -> no redirect and the app loads).
+
+  The PROXY and its 3 tricks
+
+  - Proxy = a receptionist in the middle. The device only talks to it, and it
+    dispatches to your backends by URL prefix.
+  - Host header (host spoof) = when you knock on a door you say "I came to see
+    so-and-so". The proxy tells a localhost-only backend "I am localhost" ->
+    the backend answers normally (no redirect).
+  - CORS = the browser's security guard. It only allows requests to permitted
+    origins. The proxy stamps responses "allowed" so the browser stops blocking.
+  - window.location.hostname = what the browser READS from the address bar.
+    Some apps look at this to pick a backend -> that is why they redirect when
+    the host is not localhost.
+
+  DISCOVERY (reconnection)
+
+  - mDNS = the "who's around here?" shouted to the whole network. A device
+    shouts "I am here, at this IP:port" and the others hear it, with no central
+    server. Used to auto-discover devices for QR pairing. If your network
+    BLOCKS multicast (no shouting allowed), mDNS will not resolve.
+  - nmap = the one who knocks on every door of a house to see which ones are
+    open. After pairing, we use it to find the new adb port when it rotates
+    (the mDNS replacement for the connect step).
+  - DHCP = the one who hands out addresses (IPs) in the neighborhood. A "DHCP
+    reservation" = asking it to ALWAYS give the device the same address.

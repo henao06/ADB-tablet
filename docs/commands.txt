@@ -1,0 +1,67 @@
+================  tablet.sh — cheatsheet  ================
+cd path/to/adb-tablet
+
+--- INTERACTIVE CONSOLE (optional) ---
+  ./sh/tablet.sh ui              full-screen console (devices + actions + hotkeys)
+                              builds itself on first run; needs the Rust toolchain
+  tab                         same console from anywhere (symlink in ~/.local/bin)
+
+--- CONNECT (one tablet = ONE single transport) ---
+  ./sh/tablet.sh usb    [name]   permanent cable    -> USB runtime   (most stable)
+  ./sh/tablet.sh qr     [name]   QR pairing         -> WiFi runtime
+  ./sh/tablet.sh wifi   [name]   known endpoint     -> WiFi runtime
+  ./sh/tablet.sh use             numbered menu: pick a tablet / change its type
+  ./sh/tablet.sh                 reconnects ALL according to their saved type
+  ./sh/tablet.sh status          see each tablet and how it is connected
+
+--- OPERATE ---
+  ./sh/tablet.sh cap    [name]   screenshot -> /tmp/<tablet>-<date>.png
+  ./sh/tablet.sh url             pick URL(s) (e.g. 1 3 4) + tablet(s) (e.g. 1 2 or 'all')
+                              then pick the browser (it lists the ones detected on the device)
+                              scriptable: ./sh/tablet.sh url <name> <url> [browser-package]
+  ./sh/tablet.sh browsers [name] lists detected browsers (package|label, one per line)
+
+--- MANAGE ---
+  ./sh/tablet.sh rm              pick device(s) and remove them from the registry
+  ./sh/tablet.sh proxy [cmd]     proxy control: start | stop | status | logs
+  ./sh/tablet.sh off [name]      disconnects one tablet, or EVERYTHING: tunnels, WiFi adb,
+                              proxy, adb server (enrollment survives -> ./sh/tablet.sh)
+
+--- RESPONSIVE / DEBUG ---
+  ./sh/tablet.sh size            emulate other screens: phone, phone-small, tablet-8,
+                              tablet-10, fold-open, custom (WxH dpi), reset
+  ./sh/tablet.sh rotate [name]   turn the screen: portrait, landscape, left, right, reset
+                              (reset re-enables auto-rotate; no arg = interactive menu)
+  ./sh/tablet.sh inspect [name]  Chrome DevTools bridge -> chrome://inspect on your PC
+
+--- DEBUG / CHROME ---
+  ./sh/tablet.sh clear           clears Chrome cache+cookies+SERVICE WORKER (one/several/'all')
+  ./sh/tablet.sh stop            closes Chrome (one/several/'all')
+  ./sh/tablet.sh logs   [name]   live Chromium logcat (Ctrl+C to exit)
+  ./sh/tablet.sh rec [name] [s]  records the screen -> /tmp (Ctrl+C, or stops after [s] seconds)
+
+-------------------------------------------------------
+FIRST TIME
+  deps: ./setup.sh          (one shot: adb, node, nmap, ..., Rust, console, 'tab')
+  USB : plug in the cable  ->  ./sh/tablet.sh usb
+  QR  : tablet -> Wireless debugging -> "Pair with QR"  ->  ./sh/tablet.sh qr
+
+ON THE TABLET (Chrome): open the SAME url as on your local machine
+  http://localhost:8090
+  http://localhost:5173
+
+UNPAIR / START FROM SCRATCH
+  delete the line in config/devices.env  (or empty the file)  +  adb disconnect
+
+-------------------------------------------------------
+NOTES
+  - USB = cable plugged in, the tunnel travels over the cable (does not drop with WiFi).
+  - WiFi = do not leave the cable plugged in or the tunnel sticks to USB (UsbFfs).
+  - 'clear' is your friend: if the tablet shows something old/cached, it is
+    almost always the service worker -> ./sh/tablet.sh clear and reload.
+  - closing the console does NOT drop connections -> ./sh/tablet.sh off does
+    (registry kept; ./sh/tablet.sh rm is the one that unenrolls).
+  - Ports below 1024 can NOT be reverse-forwarded by adb -> serve them through the
+    Node proxy (proxy/proxy.js): put the port behind a ROUTE and expose the proxy.
+  - config/devices.env -> source of truth: name | serial | ip:port | type(usb|wifi)
+=======================================================

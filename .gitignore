@@ -1,0 +1,11 @@
+# Build artifacts, machine-specific runtime data, editor/OS junk
+tablet-ui/target/
+config/devices.env
+config/proxy.env
+*.tmp.*
+*.swp
+*~
+nohup.out
+*.log
+.DS_Store
+Thumbs.db

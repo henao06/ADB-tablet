@@ -3,23 +3,23 @@
 # Detects the LAN IP, prints the EXACT URL for the tablet and, if 'qrencode'
 # is available, a QR code you can scan with the tablet camera (iPad or Android).
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 command -v node >/dev/null 2>&1 || {
-  echo "  [x] MISSING: node -> runs the proxy (proxy.js)."
+  echo "  [x] MISSING: node -> runs the proxy (proxy/proxy.js)."
   echo "      Fix it with:  sudo apt install -y nodejs"
-  echo "      (see DEPENDENCIES.txt to install everything at once)"
+  echo "      (see docs/DEPENDENCIES.txt to install everything at once)"
   exit 1
 }
 
-PORT="$(grep -E '^[[:space:]]*PORT[[:space:]]*=' proxy.env 2>/dev/null | head -1 | cut -d= -f2 | tr -d '[:space:]')"
+PORT="$(grep -E '^[[:space:]]*PORT[[:space:]]*=' config/proxy.env 2>/dev/null | head -1 | cut -d= -f2 | tr -d '[:space:]')"
 PORT="${PORT:-${PROXY_PORT:-8090}}"
 
 IP="$(ip route get 1.1.1.1 2>/dev/null | grep -oE 'src [0-9.]+' | awk '{print $2}')"
 [ -z "$IP" ] && IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 IP="${IP:-<your-PC-IP>}"
 
-URL="http://${IP}:${PORT}/App/#/login"
+URL="http://${IP}:${PORT}"
 
 echo ""
 echo "  =================================================================="
@@ -36,8 +36,8 @@ if command -v qrencode >/dev/null 2>&1; then
   echo ""
 else
   echo "  [!] OPTIONAL missing: qrencode -> prints a scannable QR for the tablet."
-  echo "      Install it with:  sudo apt install -y qrencode   and run ./start.sh again"
+  echo "      Install it with:  sudo apt install -y qrencode   and run ./sh/start.sh again"
   echo ""
 fi
 
-exec node proxy.js
+exec node proxy/proxy.js

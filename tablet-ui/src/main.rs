@@ -20,39 +20,10 @@ enum Act {
     Suspend(&'static [&'static str]),
     Urls,
     Sizes,
+    Rotate,
     Edit(&'static str),
     Enroll(&'static str),
 }
-
-const ACTIONS: &[(&str, &str, Act)] = &[
-    ("r", "Reconnect all devices", Act::Inside(&[], false)),
-    ("n", "Connect selected device", Act::Inside(&["wifi"], true)),
-    ("u", "Open a URL on the device", Act::Urls),
-    ("z", "Emulate a screen size", Act::Sizes),
-    ("i", "DevTools inspector bridge", Act::Inside(&["inspect"], true)),
-    ("t", "Full status report", Act::Inside(&["status"], false)),
-    ("c", "Screenshot", Act::Inside(&["cap"], true)),
-    ("v", "Record screen (Esc stops)", Act::Inside(&["rec"], true)),
-    ("l", "Live browser logs (Esc stops)", Act::Inside(&["logs"], true)),
-    ("x", "Clear browser data", Act::Inside(&["clear"], true)),
-    ("b", "Stop browser", Act::Inside(&["stop"], true)),
-    ("e", "Enroll: USB cable", Act::Enroll("usb")),
-    ("w", "Enroll: QR pairing", Act::Enroll("qr")),
-    ("m", "Remove selected device", Act::Inside(&["rm"], true)),
-    ("p", "Proxy: start / check", Act::Inside(&["proxy", "start"], false)),
-    ("o", "Proxy: stop", Act::Inside(&["proxy", "stop"], false)),
-    ("g", "Proxy: logs", Act::Inside(&["proxy", "logs"], false)),
-    ("f", "Disconnect selected device", Act::Inside(&["off"], true)),
-    ("s", "Disconnect everything (off)", Act::Inside(&["off"], false)),
-    ("d", "Install dependencies (setup)", Act::Suspend(&["setup"])),
-    ("1", "Edit urls.env", Act::Edit("urls.env")),
-    ("2", "Edit devices.env", Act::Edit("devices.env")),
-    ("3", "Edit proxy.env", Act::Edit("proxy.env")),
-];
-
-const SIZES: &[&str] = &[
-    "phone", "phone-small", "tablet-8", "tablet-10", "fold-open", "reset",
-];
 
 type Cache = HashMap<String, String>;
 
@@ -66,8 +37,10 @@ struct Device {
 enum Popup {
     Urls(Vec<String>, ListState),
     Sizes(ListState),
+    Rotations(ListState),
     Device(String, ListState),
     Target(Vec<String>, ListState),
+    Browser(String, String, Vec<(String, String)>, ListState),
     Name(&'static str, String),
 }
 
@@ -93,13 +66,50 @@ struct App {
     popup: Option<Popup>,
 }
 
+const ACTIONS: &[(&str, &str, Act)] = &[
+    ("r", "Reconnect all devices", Act::Inside(&[], false)),
+    ("n", "Connect selected device", Act::Inside(&["wifi"], true)),
+    ("u", "Open a URL on the device", Act::Urls),
+    ("z", "Emulate a screen size", Act::Sizes),
+    ("a", "Rotate the screen", Act::Rotate),
+    ("i", "DevTools inspector bridge", Act::Inside(&["inspect"], true)),
+    ("t", "Full status report", Act::Inside(&["status"], false)),
+    ("c", "Screenshot", Act::Inside(&["cap"], true)),
+    ("v", "Record screen (Esc stops)", Act::Inside(&["rec"], true)),
+    ("l", "Live browser logs (Esc stops)", Act::Inside(&["logs"], true)),
+    ("x", "Clear browser data", Act::Inside(&["clear"], true)),
+    ("b", "Stop browser", Act::Inside(&["stop"], true)),
+    ("e", "Enroll: USB cable", Act::Enroll("usb")),
+    ("w", "Enroll: QR pairing", Act::Enroll("qr")),
+    ("m", "Remove selected device", Act::Inside(&["rm"], true)),
+    ("p", "Proxy: start / check", Act::Inside(&["proxy", "start"], false)),
+    ("o", "Proxy: stop", Act::Inside(&["proxy", "stop"], false)),
+    ("g", "Proxy: logs", Act::Inside(&["proxy", "logs"], false)),
+    ("f", "Disconnect selected device", Act::Inside(&["off"], true)),
+    ("s", "Disconnect everything (off)", Act::Inside(&["off"], false)),
+    ("d", "Install dependencies (setup)", Act::Suspend(&["setup"])),
+    ("1", "Edit urls.env", Act::Edit("config/urls.env")),
+    ("2", "Edit devices.env", Act::Edit("config/devices.env")),
+    ("3", "Edit proxy.env", Act::Edit("config/proxy.env")),
+];
+
+const SIZES: &[&str] = &[
+    "phone", "phone-small", "tablet-8", "tablet-10", "fold-open", "reset",
+];
+
+const ROTATIONS: &[&str] = &["portrait", "landscape", "left", "right", "reset"];
+
+const NO_DEVICE: &str = "no device selected — enroll one first ('e' or 'w').\n";
+
+const BUSY_NOTE: &str = "[busy] a command is still running — press Esc to stop it first.\n";
+
 fn find_script() -> Option<PathBuf> {
-    let mut candidates = vec![PathBuf::from("tablet.sh")];
+    let mut candidates = vec![PathBuf::from("sh/tablet.sh")];
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("tablet.sh"));
-            candidates.push(dir.join("..").join("..").join("tablet.sh"));
-            candidates.push(dir.join("..").join("..").join("..").join("tablet.sh"));
+            candidates.push(dir.join("sh").join("tablet.sh"));
+            candidates.push(dir.join("..").join("..").join("sh").join("tablet.sh"));
+            candidates.push(dir.join("..").join("..").join("..").join("sh").join("tablet.sh"));
         }
     }
     candidates
@@ -110,7 +120,7 @@ fn find_script() -> Option<PathBuf> {
 
 fn registry(dir: &Path) -> Vec<Device> {
     let mut devices = Vec::new();
-    if let Ok(s) = std::fs::read_to_string(dir.join("devices.env")) {
+    if let Ok(s) = std::fs::read_to_string(dir.join("config/devices.env")) {
         for l in s.lines() {
             let t = l.trim();
             if t.is_empty() || t.starts_with('#') {
@@ -137,7 +147,7 @@ fn registry(dir: &Path) -> Vec<Device> {
 }
 
 fn urls(dir: &Path) -> Vec<String> {
-    std::fs::read_to_string(dir.join("urls.env"))
+    std::fs::read_to_string(dir.join("config/urls.env"))
         .map(|s| {
             s.lines()
                 .map(str::trim)
@@ -225,9 +235,21 @@ fn centered(area: Rect, pw: u16, ph: u16) -> Rect {
     )
 }
 
+fn wrap_select(state: &mut ListState, len: usize, delta: i32) {
+    if len == 0 {
+        return;
+    }
+    let cur = state.selected().unwrap_or(0) as i32;
+    state.select(Some((cur + delta).rem_euclid(len as i32) as usize));
+}
+
 impl App {
     fn new(script: PathBuf) -> Self {
-        let dir = script.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let dir = script
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
         let devices = registry(&dir);
         let mut dev_state = ListState::default();
         if !devices.is_empty() {
@@ -284,9 +306,13 @@ impl App {
 
     fn start_inside(&mut self, args: Vec<String>) {
         if self.busy() {
+            if !self.output.ends_with(BUSY_NOTE) {
+                self.output.push('\n');
+                self.output.push_str(BUSY_NOTE);
+            }
             return;
         }
-        self.output = format!("$ tablet.sh {}\n", args.join(" "));
+        self.output = format!("$ sh/tablet.sh {}\n", args.join(" "));
         self.out_scroll = None;
         let mut cmd = Command::new("bash");
         cmd.arg(&self.script)
@@ -320,7 +346,7 @@ impl App {
                 self.child = Some(child);
                 self.out_rx = Some(rx);
             }
-            Err(e) => self.output.push_str(&format!("[x] failed to run tablet.sh: {e}\n")),
+            Err(e) => self.output.push_str(&format!("[x] failed to run sh/tablet.sh: {e}\n")),
         }
     }
 
@@ -333,7 +359,10 @@ impl App {
                         self.output.push_str(&l);
                         self.output.push('\n');
                         if self.output.len() > 200_000 {
-                            let cut = self.output.len() - 150_000;
+                            let mut cut = self.output.len() - 150_000;
+                            while cut < self.output.len() && !self.output.is_char_boundary(cut) {
+                                cut += 1;
+                            }
                             let cut = self.output[cut..]
                                 .find('\n')
                                 .map(|i| cut + i + 1)
@@ -379,8 +408,8 @@ impl App {
         println!();
         match Command::new("bash").arg(&self.script).args(args).status() {
             Ok(s) if s.success() => {}
-            Ok(s) => println!("  (tablet.sh exited with {s})"),
-            Err(e) => println!("  [x] failed to run tablet.sh: {e}"),
+            Ok(s) => println!("  (sh/tablet.sh exited with {s})"),
+            Err(e) => println!("  [x] failed to run sh/tablet.sh: {e}"),
         }
         println!();
         print!("  Press Enter to return to the console...");
@@ -394,14 +423,23 @@ impl App {
     fn edit_file(&mut self, terminal: &mut DefaultTerminal, file: &str) -> io::Result<()> {
         ratatui::restore();
         let path = self.dir.join(file);
-        let _ = Command::new("sh")
+        let ed = editor();
+        let status = Command::new("sh")
             .arg("-c")
-            .arg(format!("{} \"$1\"", editor()))
+            .arg(format!("{ed} \"$1\""))
             .arg("sh")
             .arg(&path)
             .status();
         *terminal = ratatui::init();
-        self.output = format!("{file} saved — press 'r' to re-apply tunnels/proxy\n");
+        self.output = match status {
+            Ok(s) if s.success() => {
+                format!("{file} saved — press 'r' to re-apply tunnels/proxy\n")
+            }
+            Ok(s) => format!("[x] editor '{ed}' exited with {s} — {file} left unchanged\n"),
+            Err(e) => format!(
+                "[x] could not launch editor '{ed}': {e} — set a valid editor with: export EDITOR=nano\n"
+            ),
+        };
         self.refresh();
         Ok(())
     }
@@ -409,7 +447,7 @@ impl App {
     fn execute(&mut self, terminal: &mut DefaultTerminal, idx: usize) -> io::Result<()> {
         match &ACTIONS[idx].2 {
             Act::Edit(file) => return self.edit_file(terminal, file),
-            Act::Enroll(cmd) => self.popup = Some(Popup::Name(*cmd, String::new())),
+            Act::Enroll(cmd) => self.popup = Some(Popup::Name(cmd, String::new())),
             Act::Suspend(args) => {
                 let args: Vec<&str> = args.to_vec();
                 return self.run_suspend(terminal, &args);
@@ -429,12 +467,16 @@ impl App {
                 st.select(Some(0));
                 self.popup = Some(Popup::Sizes(st));
             }
+            Act::Rotate => {
+                let mut st = ListState::default();
+                st.select(Some(0));
+                self.popup = Some(Popup::Rotations(st));
+            }
             Act::Inside(args, takes_device) => {
                 let full: Vec<String> = args.iter().map(|s| s.to_string()).collect();
                 if *takes_device {
                     if self.devices.is_empty() {
-                        self.output =
-                            "no device selected — enroll one first ('e' or 'w').\n".to_string();
+                        self.output = NO_DEVICE.to_string();
                         return Ok(());
                     }
                     let mut st = ListState::default();
@@ -455,7 +497,7 @@ impl App {
                 if let Some(i) = st.selected() {
                     let url = items[i].clone();
                     if self.devices.is_empty() {
-                        self.output = "no devices enrolled — press 'e' or 'w'.\n".to_string();
+                        self.output = NO_DEVICE.to_string();
                         return;
                     }
                     let mut ds = ListState::default();
@@ -468,14 +510,21 @@ impl App {
                     if let Some(d) = self.devices.get(i) {
                         let n = d.name.clone();
                         self.dev_state.select(Some(i));
-                        self.start_inside(vec!["url".into(), n, url]);
+                        self.open_browser_popup(url, n);
+                    }
+                }
+            }
+            Popup::Browser(url, device, items, st) => {
+                if let Some(i) = st.selected() {
+                    if let Some((pkg, _)) = items.get(i) {
+                        let p = pkg.clone();
+                        self.start_inside(vec!["url".into(), device, url, p]);
                     }
                 }
             }
             Popup::Sizes(st) => {
                 if self.devices.is_empty() {
-                    self.output =
-                        "no device selected — enroll one first ('e' or 'w').\n".to_string();
+                    self.output = NO_DEVICE.to_string();
                     return;
                 }
                 if let Some(i) = st.selected() {
@@ -483,6 +532,20 @@ impl App {
                     ds.select(Some(self.dev_state.selected().unwrap_or(0)));
                     self.popup =
                         Some(Popup::Target(vec!["size".into(), SIZES[i].to_string()], ds));
+                }
+            }
+            Popup::Rotations(st) => {
+                if self.devices.is_empty() {
+                    self.output = NO_DEVICE.to_string();
+                    return;
+                }
+                if let Some(i) = st.selected() {
+                    let mut ds = ListState::default();
+                    ds.select(Some(self.dev_state.selected().unwrap_or(0)));
+                    self.popup = Some(Popup::Target(
+                        vec!["rotate".into(), ROTATIONS[i].to_string()],
+                        ds,
+                    ));
                 }
             }
             Popup::Target(args, st) => {
@@ -563,6 +626,14 @@ impl App {
                 } else if key.code == KeyCode::Char('q') {
                     self.kill_child();
                     return Ok(());
+                } else {
+                    let is_action = key.code == KeyCode::Enter
+                        || matches!(key.code, KeyCode::Char(c)
+                            if ACTIONS.iter().any(|a| a.0 == c.to_string()));
+                    if is_action && !self.output.ends_with(BUSY_NOTE) {
+                        self.output.push('\n');
+                        self.output.push_str(BUSY_NOTE);
+                    }
                 }
                 continue;
             }
@@ -596,6 +667,40 @@ impl App {
         }
     }
 
+    fn open_browser_popup(&mut self, url: String, device: String) {
+        let mut items: Vec<(String, String)> = Vec::new();
+        if let Ok(o) = Command::new("bash")
+            .arg(&self.script)
+            .args(["browsers", &device])
+            .output()
+        {
+            if o.status.success() {
+                for l in String::from_utf8_lossy(&o.stdout).lines() {
+                    let l = l.trim();
+                    if l.is_empty() {
+                        continue;
+                    }
+                    let (pkg, label) = match l.split_once('|') {
+                        Some((p, lb)) => (p.trim().to_string(), lb.trim().to_string()),
+                        None => (l.to_string(), l.to_string()),
+                    };
+                    if !pkg.is_empty() {
+                        items.push((pkg, label));
+                    }
+                }
+            }
+        }
+        if items.is_empty() {
+            self.start_inside(vec!["url".into(), device, url]);
+            self.output
+                .push_str("no browser list from the device — using the system default.\n");
+            return;
+        }
+        let mut st = ListState::default();
+        st.select(Some(0));
+        self.popup = Some(Popup::Browser(url, device, items, st));
+    }
+
     fn name_edit(&mut self, c: Option<char>) {
         if let Some(Popup::Name(_, buf)) = &mut self.popup {
             match c {
@@ -613,14 +718,12 @@ impl App {
             let (state, len) = match popup {
                 Popup::Urls(items, st) => (st, items.len()),
                 Popup::Sizes(st) => (st, SIZES.len()),
+                Popup::Rotations(st) => (st, ROTATIONS.len()),
                 Popup::Device(_, st) | Popup::Target(_, st) => (st, self.devices.len()),
+                Popup::Browser(_, _, items, st) => (st, items.len()),
                 Popup::Name(_, _) => return,
             };
-            if len == 0 {
-                return;
-            }
-            let cur = state.selected().unwrap_or(0) as i32;
-            state.select(Some((cur + delta).rem_euclid(len as i32) as usize));
+            wrap_select(state, len, delta);
         }
     }
 
@@ -637,11 +740,7 @@ impl App {
                 return;
             }
         };
-        if len == 0 {
-            return;
-        }
-        let cur = state.selected().unwrap_or(0) as i32;
-        state.select(Some((cur + delta).rem_euclid(len as i32) as usize));
+        wrap_select(state, len, delta);
     }
 
     fn draw(&mut self, f: &mut Frame) {
@@ -807,7 +906,7 @@ impl App {
             let lines = vec![
                 Line::from(format!(" {buf}▌")),
                 Line::from(Span::styled(
-                    format!(" runs: tablet.sh {cmd} {buf}"),
+                    format!(" runs: sh/tablet.sh {cmd} {buf}"),
                     Style::default().fg(Color::DarkGray),
                 )),
             ];
@@ -846,6 +945,19 @@ impl App {
                 SIZES.iter().map(|s| ListItem::new(*s)).collect(),
                 st,
             ),
+            Popup::Rotations(st) => (
+                " Rotate to which orientation? ",
+                ROTATIONS.iter().map(|s| ListItem::new(*s)).collect(),
+                st,
+            ),
+            Popup::Browser(_, _, items, st) => (
+                " Open with which browser? ",
+                items
+                    .iter()
+                    .map(|(pkg, label)| ListItem::new(format!("{label}  ({pkg})")))
+                    .collect(),
+                st,
+            ),
             Popup::Name(_, _) => return,
         };
         let h = (items.len() as u16 + 2).min(14);
@@ -863,14 +975,21 @@ impl App {
     }
 }
 
+struct TermGuard;
+
+impl Drop for TermGuard {
+    fn drop(&mut self) {
+        ratatui::restore();
+    }
+}
+
 fn main() -> io::Result<()> {
     let Some(script) = find_script() else {
-        eprintln!("  [x] tablet.sh not found. Run tablet-ui from the project directory.");
+        eprintln!("  [x] sh/tablet.sh not found. Run tablet-ui from the project directory.");
         std::process::exit(1);
     };
     let mut app = App::new(script);
     let mut terminal = ratatui::init();
-    let res = app.run(&mut terminal);
-    ratatui::restore();
-    res
+    let _guard = TermGuard;
+    app.run(&mut terminal)
 }
